@@ -1,7 +1,19 @@
 import os
 import re
 import sys
+import warnings
+import numpy as np
 import joblib
+
+# Suppress harmless scikit-learn cross-version unpickling warnings
+warnings.filterwarnings("ignore")
+
+# Ensure UTF-8 output on Windows consoles if possible
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 
 # Paths to trained model and vectorizer
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -40,10 +52,15 @@ def predict(news_text: str, model, vectorizer):
     vector = vectorizer.transform([cleaned])
     prediction = model.predict(vector)[0]
 
-    # Model probability if supported
-    probs = None
-    if hasattr(model, "predict_proba"):
-        probs = model.predict_proba(vector)[0]
+    # Robust probability estimation across scikit-learn versions
+    prob_real, prob_fake = None, None
+    try:
+        if hasattr(model, "decision_function"):
+            score = float(model.decision_function(vector)[0])
+            prob_fake = 1.0 / (1.0 + np.exp(-score))
+            prob_real = 1.0 - prob_fake
+    except Exception:
+        pass
 
     # 0 = REAL, 1 = FAKE
     is_fake = bool(prediction == 1)
@@ -53,22 +70,22 @@ def predict(news_text: str, model, vectorizer):
         "label": label,
         "is_fake": is_fake,
         "probabilities": {
-            "real": probs[0] * 100 if probs is not None else None,
-            "fake": probs[1] * 100 if probs is not None else None,
+            "real": prob_real * 100 if prob_real is not None else None,
+            "fake": prob_fake * 100 if prob_fake is not None else None,
         },
     }
 
 
 def main():
     print("=" * 60)
-    print("      📰 FAKE NEWS DETECTION SYSTEM (ML Inference)      ")
+    print("        FAKE NEWS DETECTION SYSTEM (ML Inference)        ")
     print("=" * 60)
 
     try:
         model, vectorizer = load_artifacts()
-        print("✓ Model and TF-IDF Vectorizer loaded successfully.\n")
+        print("[+] Model and TF-IDF Vectorizer loaded successfully.\n")
     except Exception as e:
-        print(f"Error loading model artifacts: {e}")
+        print(f"[-] Error loading model artifacts: {e}")
         sys.exit(1)
 
     if len(sys.argv) > 1:
@@ -95,7 +112,7 @@ def main():
                 break
 
             res = predict(user_input, model, vectorizer)
-            badge = "🚨 FAKE NEWS" if res["is_fake"] else "✅ REAL NEWS"
+            badge = "[!] FAKE NEWS" if res["is_fake"] else "[*] REAL NEWS"
             print("-" * 50)
             print(f"Result: {badge}")
             if res["probabilities"]["real"] is not None:
